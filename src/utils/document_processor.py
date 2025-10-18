@@ -1,0 +1,40 @@
+import logging
+from src.utils.vision_processor import YandexVisionProcessor
+from src.parsers.passport_parser import PassportParser
+
+logger = logging.getLogger(__name__)
+
+class DocumentProcessor:
+    def __init__(self):
+        self.vision = YandexVisionProcessor()
+        self.parser = PassportParser()
+    
+    async def process_document(self, file_path: str) -> dict:
+        """
+        Основной метод обработки документа
+        """
+        try:
+            logger.info(f"Начинаем обработку документа: {file_path}")
+            
+            # Шаг 1: Распознаем текст с помощью Yandex Vision
+            extracted_text = self.vision.extract_text(file_path)
+            
+            if not extracted_text or "Ошибка" in extracted_text:
+                return {
+                    'error': f'Не удалось распознать текст: {extracted_text}',
+                    'raw_text': ''
+                }
+            
+            logger.info(f"Распознано текста: {len(extracted_text)} символов")
+            
+            # Шаг 2: Парсим данные из текста
+            parsed_data = self.parser.parse(extracted_text)
+            
+            # Добавляем распознанный текст к результату
+            parsed_data['extracted_text'] = extracted_text[:1000]  # Ограничиваем длину
+            
+            return parsed_data
+            
+        except Exception as e:
+            logger.error(f"Ошибка в process_document: {e}")
+            return {'error': f'Системная ошибка: {str(e)}'}
