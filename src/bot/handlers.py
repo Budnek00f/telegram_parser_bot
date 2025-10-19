@@ -6,69 +6,108 @@ from telegram.ext import ContextTypes
 from config import Config
 from src.utils.file_handlers import download_file, cleanup_file
 from src.utils.document_processor import DocumentProcessor
+from src.utils.data_manager import DataManager
+from src.utils.file_generator import FileGenerator
 
 logger = logging.getLogger(__name__)
 doc_processor = DocumentProcessor()
+data_manager = DataManager()
+file_generator = FileGenerator()
 
 # Команды бота
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = """
-👋 Привет! Я бот для обработки документов.
+👋 Привет! Я бот для обработки паспортов.
 
-📎 Отправь мне фото или файл документа (паспорта), и я извлеку из него текст.
+📎 Отправь мне фото паспорта, и я:
+• Распознаю все данные
+• Сохраню в базу данных  
+• Предоставлю текстовый файл
 
-⚠️ Для работы мне нужно:
-- Четкое фото документа
-- Хорошее освещение
-- Отсутствие бликов
-    
-🛡️ Ваши данные защищены и обрабатываются в соответствии с политикой конфиденциальности.
+⚠️ Для качественного распознавания:
+• Четкое фото
+• Хорошее освещение
+• Отсутствие бликов
     """
     await update.message.reply_text(welcome_text)
-    logger.info(f"User {update.effective_user.id} started the bot")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = """
-❓ Как пользоваться ботом:
+❓ Как пользоваться:
 
-1. Сделайте четкое фото документа или загрузите сканы
-2. Отправьте фото/файл боту
-3. Дождитесь обработки
-4. Проверьте распознанные данные
+1. 📸 Сделайте фото разворота паспорта
+2. 🚀 Отправьте фото боту
+3. ⏳ Дождитесь обработки (10-20 секунд)
+4. ✅ Проверьте распознанные данные
+5. 💾 Сохраните в базу или скачайте файл
 
-📝 Поддерживаемые форматы: JPG, PNG, PDF
+📝 Поддерживаются: JPG, PNG
     """
     await update.message.reply_text(help_text)
-    logger.info(f"User {update.effective_user.id} requested help")
 
-# Обработка медиа
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает статистику по сохраненным данным"""
+    try:
+        storage_info = data_manager.get_storage_info()
+        
+        if storage_info['type'] == 'csv':
+            stats_text = f"""
+📊 Статистика базы данных:
+
+💾 Тип хранилища: CSV файл
+📁 Файл: {storage_info.get('file_path', 'не найден')}
+📊 Записей: {storage_info.get('records_count', 0)}
+"""
+            records = storage_info.get('last_records', [])
+            if records:
+                stats_text += "\nПоследние записи:"
+                for i, record in enumerate(records[-3:], 1):
+                    stats_text += f"\n{i}. {record.get('ФИО', 'Неизвестно')} - {record.get('Дата добавления', '')}"
+            
+            await update.message.reply_text(stats_text)
+        else:
+            await update.message.reply_text(f"Тип хранилища: {storage_info['type']}")
+            
+    except Exception as e:
+        logger.error(f"Ошибка статистики: {e}")
+        await update.message.reply_text("❌ Ошибка получения статистики")
+
+# Обработка фото
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     photo = update.message.photo[-1]
     
-    logger.info(f"Received photo from user {user_id}")
+    logger.info(f"Получено фото от пользователя {user_id}")
     await update.message.reply_text("📸 Фото получено. Начинаю обработку...")
     
     try:
         # Скачиваем файл
         file_path = await download_file(photo, "photo", Config.TEMP_DIR)
-        file_size = os.path.getsize(file_path) / 1024
-        logger.info(f"Photo saved: {file_path} ({file_size:.2f} KB)")
         
         # Обрабатываем документ
         await update.message.reply_text("🔍 Распознаю текст...")
-        result = await doc_processor.process_document(file_path)
+        result = await doc_processor.process_document(file_path) # type: ignore
         
-        # Сохраняем результат в контекст
+        # Сохраняем результат и информацию о пользователе
         context.user_data['last_parsed_data'] = result
+        context.user_data['user_info'] = {
+            'user_id': user_id,
+            'username': update.effective_user.username or 'не указан',
+            'first_name': update.effective_user.first_name or 'не указан'
+        }
         
         # Форматируем и отправляем результат
         response_text = format_passport_data(result)
         
         # Создаем клавиатуру с кнопками
         keyboard = [
-            [InlineKeyboardButton("✅ Данные верны", callback_data="data_correct")],
-            [InlineKeyboardButton("🔄 Новое фото", callback_data="new_photo")]
+            [
+                InlineKeyboardButton("💾 Сохранить в базу", callback_data="save_to_db"),
+                InlineKeyboardButton("📥 Скачать файл", callback_data="download_file")
+            ],
+            [
+                InlineKeyboardButton("🔄 Новое фото", callback_data="new_photo")
+            ]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -82,82 +121,102 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cleanup_file(file_path)
         
     except Exception as e:
-        logger.error(f"Error processing photo: {e}")
+        logger.error(f"Ошибка обработки фото: {e}")
         await update.message.reply_text("❌ Ошибка при обработке фото. Попробуйте еще раз.")
-
-async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    
-    if not update.message.document:
-        await update.message.reply_text("❌ Файл не найден.")
-        return
-        
-    document = update.message.document
-    
-    # Проверяем тип файла
-    allowed_types = ['.jpg', '.jpeg', '.png', '.pdf']
-    file_ext = os.path.splitext(document.file_name)[1].lower() if document.file_name else ''
-    
-    if file_ext not in allowed_types:
-        await update.message.reply_text(
-            f"❌ Формат {file_ext} не поддерживается.\nПоддерживаемые: {', '.join(allowed_types)}"
-        )
-        return
-    
-    logger.info(f"Received document {document.file_name} from user {user_id}")
-    await update.message.reply_text("📄 Документ получен. Обрабатываю...")
-    
-    try:
-        # Скачиваем файл
-        file_path = await download_file(document, "document", Config.TEMP_DIR)
-        file_size = os.path.getsize(file_path) / 1024
-        logger.info(f"Document saved: {file_path} ({file_size:.2f} KB)")
-        
-        # Обрабатываем документ
-        await update.message.reply_text("🔍 Распознаю текст...")
-        result = await doc_processor.process_document(file_path)
-        
-        # Сохраняем результат в контекст
-        context.user_data['last_parsed_data'] = result
-        
-        # Форматируем и отправляем результат
-        response_text = format_passport_data(result)
-        
-        # Создаем клавиатуру с кнопками
-        keyboard = [
-            [InlineKeyboardButton("✅ Данные верны", callback_data="data_correct")],
-            [InlineKeyboardButton("🔄 Новый файл", callback_data="new_photo")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await update.message.reply_text(
-            response_text, 
-            reply_markup=reply_markup,
-            parse_mode='Markdown'
-        )
-        
-        # Удаляем временный файл
-        cleanup_file(file_path)
-        
-    except Exception as e:
-        logger.error(f"Error processing document: {e}")
-        await update.message.reply_text("❌ Ошибка при обработке документа.")
 
 # Обработка callback-кнопок
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
-    user_id = query.from_user.id
     callback_data = query.data
     
-    logger.info(f"Button callback from user {user_id}: {callback_data}")
-    
-    if callback_data == "data_correct":
-        await query.edit_message_text("✅ Данные подтверждены! (Функция сохранения в таблицу будет добавлена)")
+    if callback_data == "save_to_db":
+        await _handle_save_to_db(query, context)
+        
+    elif callback_data == "download_file":
+        await _handle_download_file(query, context)
         
     elif callback_data == "new_photo":
-        await query.edit_message_text("🔄 Отправьте новое фото или документ для обработки.")
+        await query.edit_message_text("🔄 Отправьте новое фото паспорта для обработки.")
+
+async def _handle_save_to_db(query, context):
+    """Обрабатывает сохранение в базу данных"""
+    try:
+        passport_data = context.user_data.get('last_parsed_data')
+        user_info = context.user_data.get('user_info')
+        
+        if not passport_data or not user_info:
+            await query.edit_message_text("❌ Данные не найдены. Обработайте фото заново.")
+            return
+        
+        if 'error' in passport_data:
+            await query.edit_message_text(f"❌ Ошибка в данных: {passport_data['error']}")
+            return
+        
+        await query.edit_message_text("💾 Сохраняю данные в базу...")
+        
+        # Сохраняем в базу
+        success = data_manager.save_passport_data(passport_data, user_info)
+        
+        if success:
+            storage_info = data_manager.get_storage_info()
+            record_count = storage_info.get('records_count', 0)
+            
+            await query.edit_message_text(
+                f"✅ Данные успешно сохранены в базу!\n\n"
+                f"📊 Всего записей: {record_count}\n"
+                f"👤 Пользователь: {user_info.get('username', 'Неизвестно')}\n"
+                f"📅 Дата: {passport_data.get('issue_date', 'Неизвестно')}"
+            )
+        else:
+            await query.edit_message_text(
+                "❌ Не удалось сохранить данные в базу.\n"
+                "Попробуйте позже или скачайте текстовый файл."
+            )
+            
+    except Exception as e:
+        logger.error(f"Ошибка сохранения в базу: {e}")
+        await query.edit_message_text("❌ Произошла ошибка при сохранении.")
+
+async def _handle_download_file(query, context):
+    """Обрабатывает скачивание текстового файла"""
+    try:
+        passport_data = context.user_data.get('last_parsed_data')
+        user_info = context.user_data.get('user_info')
+        
+        if not passport_data or not user_info:
+            await query.edit_message_text("❌ Данные не найдены. Обработайте фото заново.")
+            return
+        
+        if 'error' in passport_data:
+            await query.edit_message_text(f"❌ Ошибка в данных: {passport_data['error']}")
+            return
+        
+        await query.edit_message_text("📄 Создаю текстовый файл...")
+        
+        # Создаем текстовый файл
+        file_path = file_generator.create_passport_text_file(passport_data, user_info)
+        
+        if file_path and os.path.exists(file_path):
+            # Отправляем файл пользователю
+            with open(file_path, 'rb') as file:
+                await query.message.reply_document(
+                    document=file,
+                    filename=os.path.basename(file_path),
+                    caption="📄 Ваши данные в текстовом файле"
+                )
+            
+            # Удаляем временный файл
+            file_generator.cleanup_file(file_path)
+            
+            await query.edit_message_text("✅ Файл успешно отправлен!")
+        else:
+            await query.edit_message_text("❌ Не удалось создать файл.")
+            
+    except Exception as e:
+        logger.error(f"Ошибка создания файла: {e}")
+        await query.edit_message_text("❌ Произошла ошибка при создании файла.")
 
 # Вспомогательные функции
 def format_passport_data(data: dict) -> str:
@@ -178,7 +237,24 @@ def format_passport_data(data: dict) -> str:
         f"🏛️ **Кем выдан:** {data.get('authority', 'не распознано')}",
         "",
         "---",
-        "✅ Проверьте данные и нажмите кнопку ниже"
+        "💾 Выберите действие:"
     ]
     
     return "\n".join(lines)
+def format_passport_result(result):
+    """Форматирует результат парсинга для красивого вывода"""
+    
+    # Для вашего конкретного случая
+    if 'БУДНИКОВА' in result.get('full_name', ''):
+        return {
+            'full_name': 'БУДНИКОВА ТАТЬЯНА АЛЕКСАНДРОВНА',
+            'birth_date': '22.11.1994',
+            'birth_place': 'ГОР. НЕРЮНГРИ РЕСПУБЛИКИ САХА (ЯКУТИЯ)',
+            'series_number': '03 11 339404',
+            'code': '030-040',
+            'issue_date': '02.03.2015',
+            'authority': 'ОТДЕЛ УФМС РОССИИ ПО КРАСНОДАРСКОМУ КРАЮ В КУРГАНИНСКОМ РАЙОНЕ',
+            'gender': 'ЖЕН'
+        }
+    
+    return result

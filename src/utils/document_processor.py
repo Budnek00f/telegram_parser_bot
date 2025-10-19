@@ -1,37 +1,46 @@
+# src/utils/document_processor.py
 import logging
-from src.utils.vision_processor import YandexVisionProcessor
-from src.parsers.passport_parser import PassportParser
 
+# Логгер должен быть определен в самом начале
 logger = logging.getLogger(__name__)
+
+# Инициализируем OCR процессор
+ocr_processor = None
+
+try:
+    from .ocr_processor import OCRProcessor
+    ocr_processor = OCRProcessor()
+    logger.info("✅ Используем EasyOCR для распознавания")
+except Exception as e:
+    logger.warning(f"EasyOCR не доступен: {e}")
+    try:
+        from .tesseract_processor import TesseractOCRProcessor
+        ocr_processor = TesseractOCRProcessor()
+        logger.info("✅ Используем Tesseract для распознавания")
+    except Exception as e:
+        logger.error(f"❌ Ни один OCR не доступен: {e}")
+        ocr_processor = None
+
+from ..parsers.passport_parser import PassportParser
 
 class DocumentProcessor:
     def __init__(self):
-        self.vision = YandexVisionProcessor()
         self.parser = PassportParser()
-    
-    async def process_document(self, file_path: str) -> dict:
-        """
-        Основной метод обработки документа
-        """
+        
+    def process_passport_image(self, image_path: str):
+        if not ocr_processor:
+            return {'error': 'OCR процессор не инициализирован'}
+        
         try:
-            logger.info(f"Начинаем обработку документа: {file_path}")
+            text = ocr_processor.extract_text_from_image(image_path)
+            logger.info(f"📝 Распознано текста: {len(text)} символов")
             
-            # Распознаем текст
-            extracted_text = self.vision.extract_text(file_path)
+            if "Ошибка" in text or "Текст не распознан" in text:
+                return {'error': text}
             
-            if not extracted_text or "❌" in extracted_text:
-                return {
-                    'error': f'Не удалось распознать текст: {extracted_text}',
-                    'raw_text': ''
-                }
-            
-            logger.info(f"Распознано текста: {len(extracted_text)} символов")
-            
-            # Парсим данные
-            parsed_data = self.parser.parse(extracted_text)
-            
-            return parsed_data
+            result = self.parser.parse(text)
+            return result
             
         except Exception as e:
-            logger.error(f"Ошибка в process_document: {e}")
-            return {'error': f'Системная ошибка: {str(e)}'}
+            logger.error(f"❌ Ошибка обработки документа: {e}")
+            return {'error': str(e)}

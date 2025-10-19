@@ -6,8 +6,8 @@ from config import Config
 from src.bot.handlers import (
     start_command, 
     help_command, 
+    stats_command,
     handle_photo, 
-    handle_document,
     button_callback
 )
 
@@ -26,8 +26,7 @@ def main():
     
     # Проверка токена
     if not Config.BOT_TOKEN:
-        logger.error("BOT_TOKEN not found in environment variables!")
-        print("❌ Ошибка: BOT_TOKEN не найден в .env файле!")
+        logger.error("BOT_TOKEN not found!")
         return
     
     # Создание приложения
@@ -36,10 +35,10 @@ def main():
     # Регистрация обработчиков команд
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("stats", stats_command))
     
-    # Регистрация обработчиков медиа
+    # Регистрация обработчиков медиа (ТОЛЬКО фото)
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     
     # Регистрация обработчика callback-кнопок
     application.add_handler(CallbackQueryHandler(button_callback))
