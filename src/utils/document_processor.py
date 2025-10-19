@@ -16,10 +16,10 @@ class DocumentProcessor:
         try:
             logger.info(f"Начинаем обработку документа: {file_path}")
             
-            # Шаг 1: Распознаем текст с помощью Yandex Vision
+            # Распознаем текст
             extracted_text = self.vision.extract_text(file_path)
             
-            if not extracted_text or "Ошибка" in extracted_text:
+            if not extracted_text or "❌" in extracted_text:
                 return {
                     'error': f'Не удалось распознать текст: {extracted_text}',
                     'raw_text': ''
@@ -27,11 +27,8 @@ class DocumentProcessor:
             
             logger.info(f"Распознано текста: {len(extracted_text)} символов")
             
-            # Шаг 2: Парсим данные из текста
+            # Парсим данные
             parsed_data = self.parser.parse(extracted_text)
-            
-            # Добавляем распознанный текст к результату
-            parsed_data['extracted_text'] = extracted_text[:1000]  # Ограничиваем длину
             
             return parsed_data
             

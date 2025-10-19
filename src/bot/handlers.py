@@ -1,6 +1,6 @@
 import os
 import logging
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 from config import Config
@@ -35,9 +35,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 2. Отправьте фото/файл боту
 3. Дождитесь обработки
 4. Проверьте распознанные данные
-5. Подтвердите сохранение в таблицу
 
-📝 Поддерживаемые форматы: JPG, PNG, PDF, TIFF
+📝 Поддерживаемые форматы: JPG, PNG, PDF
     """
     await update.message.reply_text(help_text)
     logger.info(f"User {update.effective_user.id} requested help")
@@ -45,7 +44,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Обработка медиа
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    photo = update.message.photo[-1]  # Берем самое качественное фото
+    photo = update.message.photo[-1]
     
     logger.info(f"Received photo from user {user_id}")
     await update.message.reply_text("📸 Фото получено. Начинаю обработку...")
@@ -53,75 +52,112 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         # Скачиваем файл
         file_path = await download_file(photo, "photo", Config.TEMP_DIR)
-        
-        # Логируем информацию о файле
-        file_size = os.path.getsize(file_path) / 1024  # KB
+        file_size = os.path.getsize(file_path) / 1024
         logger.info(f"Photo saved: {file_path} ({file_size:.2f} KB)")
         
         # Обрабатываем документ
         await update.message.reply_text("🔍 Распознаю текст...")
         result = await doc_processor.process_document(file_path)
         
+        # Сохраняем результат в контекст
+        context.user_data['last_parsed_data'] = result
+        
         # Форматируем и отправляем результат
         response_text = format_passport_data(result)
-        await update.message.reply_text(response_text, parse_mode='Markdown')
         
-        # Логируем для отладки
-        if 'extracted_text' in result:
-            logger.debug(f"Распознанный текст: {result['extracted_text'][:200]}...")
+        # Создаем клавиатуру с кнопками
+        keyboard = [
+            [InlineKeyboardButton("✅ Данные верны", callback_data="data_correct")],
+            [InlineKeyboardButton("🔄 Новое фото", callback_data="new_photo")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            response_text, 
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
         
         # Удаляем временный файл
         cleanup_file(file_path)
         
     except Exception as e:
-        logger.error(f"Error processing photo from user {user_id}: {e}")
+        logger.error(f"Error processing photo: {e}")
         await update.message.reply_text("❌ Ошибка при обработке фото. Попробуйте еще раз.")
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
-    # Проверяем, есть ли документ в сообщении
     if not update.message.document:
-        await update.message.reply_text("❌ Файл не найден в сообщении.")
+        await update.message.reply_text("❌ Файл не найден.")
         return
         
     document = update.message.document
     
     # Проверяем тип файла
-    allowed_types = ['.jpg', '.jpeg', '.png', '.pdf', '.tiff', '.tif']
+    allowed_types = ['.jpg', '.jpeg', '.png', '.pdf']
     file_ext = os.path.splitext(document.file_name)[1].lower() if document.file_name else ''
     
     if file_ext not in allowed_types:
         await update.message.reply_text(
-            f"❌ Формат {file_ext} не поддерживается.\n"
-            f"📝 Поддерживаемые форматы: {', '.join(allowed_types)}"
+            f"❌ Формат {file_ext} не поддерживается.\nПоддерживаемые: {', '.join(allowed_types)}"
         )
         return
     
     logger.info(f"Received document {document.file_name} from user {user_id}")
-    await update.message.reply_text("📄 Документ получен. Начинаю обработку...")
+    await update.message.reply_text("📄 Документ получен. Обрабатываю...")
     
     try:
         # Скачиваем файл
         file_path = await download_file(document, "document", Config.TEMP_DIR)
-        
-        file_size = os.path.getsize(file_path) / 1024  # KB
+        file_size = os.path.getsize(file_path) / 1024
         logger.info(f"Document saved: {file_path} ({file_size:.2f} KB)")
         
         # Обрабатываем документ
         await update.message.reply_text("🔍 Распознаю текст...")
         result = await doc_processor.process_document(file_path)
         
+        # Сохраняем результат в контекст
+        context.user_data['last_parsed_data'] = result
+        
         # Форматируем и отправляем результат
         response_text = format_passport_data(result)
-        await update.message.reply_text(response_text, parse_mode='Markdown')
+        
+        # Создаем клавиатуру с кнопками
+        keyboard = [
+            [InlineKeyboardButton("✅ Данные верны", callback_data="data_correct")],
+            [InlineKeyboardButton("🔄 Новый файл", callback_data="new_photo")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            response_text, 
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
         
         # Удаляем временный файл
         cleanup_file(file_path)
         
     except Exception as e:
-        logger.error(f"Error processing document from user {user_id}: {e}")
-        await update.message.reply_text("❌ Ошибка при обработке документа. Попробуйте еще раз.")
+        logger.error(f"Error processing document: {e}")
+        await update.message.reply_text("❌ Ошибка при обработке документа.")
+
+# Обработка callback-кнопок
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    callback_data = query.data
+    
+    logger.info(f"Button callback from user {user_id}: {callback_data}")
+    
+    if callback_data == "data_correct":
+        await query.edit_message_text("✅ Данные подтверждены! (Функция сохранения в таблицу будет добавлена)")
+        
+    elif callback_data == "new_photo":
+        await query.edit_message_text("🔄 Отправьте новое фото или документ для обработки.")
 
 # Вспомогательные функции
 def format_passport_data(data: dict) -> str:
@@ -142,12 +178,7 @@ def format_passport_data(data: dict) -> str:
         f"🏛️ **Кем выдан:** {data.get('authority', 'не распознано')}",
         "",
         "---",
-        "🔍 *Для улучшения точности:*",
-        "- Убедитесь, что фото содержит страницу с серией и номером",
-        "- Серия и номер обычно находятся на другой странице",
-        "- Сфотографируйте обе страницы разворота",
-        "---",
-        "✅ Проверьте данные перед сохранением"
+        "✅ Проверьте данные и нажмите кнопку ниже"
     ]
     
     return "\n".join(lines)

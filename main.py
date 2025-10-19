@@ -1,13 +1,14 @@
 import os
 import logging
-from telegram.ext import Application, MessageHandler, filters, CommandHandler
+from telegram.ext import Application, MessageHandler, filters, CommandHandler, CallbackQueryHandler
 
 from config import Config
 from src.bot.handlers import (
     start_command, 
     help_command, 
     handle_photo, 
-    handle_document
+    handle_document,
+    button_callback
 )
 
 def main():
@@ -36,9 +37,12 @@ def main():
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
     
-    # Регистрация обработчиков медиа - ИСПРАВЛЕННЫЕ ФИЛЬТРЫ
+    # Регистрация обработчиков медиа
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    application.add_handler(MessageHandler(filters.ATTACHMENT, handle_document))
+    application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
+    
+    # Регистрация обработчика callback-кнопок
+    application.add_handler(CallbackQueryHandler(button_callback))
     
     # Запуск бота
     logger.info("Bot is starting...")

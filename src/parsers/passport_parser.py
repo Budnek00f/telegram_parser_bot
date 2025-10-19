@@ -7,80 +7,66 @@ logger = logging.getLogger(__name__)
 class PassportParser:
     def parse(self, text: str) -> dict:
         """
-        Улучшенный парсер для паспорта РФ с обработкой машиночитаемой зоны
+        Универсальный парсер паспортных данных
         """
         try:
-            # Очищаем и подготавливаем текст
-            cleaned_text = self._clean_text(text)
+            # Очищаем текст
+            text = re.sub(r'\s+', ' ', text).upper().strip()
+            logger.info(f"Текст для парсинга:\n{text}")
             
-            # Логируем очищенный текст для отладки
-            logger.info(f"Очищенный текст для парсинга:\n{cleaned_text}")
-            
-            # Разделяем текст на визуальную и машиночитаемую зоны
-            visual_zone, machine_zone = self._split_zones(cleaned_text)
-            logger.info(f"Визуальная зона: {visual_zone}")
-            logger.info(f"Машиночитаемая зона: {machine_zone}")
-            
-            # Извлекаем данные из обеих зон
+            # Извлекаем данные
             result = {
-                'full_name': self._extract_name_combined(visual_zone, machine_zone),
-                'birth_date': self._extract_birth_date_combined(visual_zone, machine_zone),
-                'passport_series': self._extract_passport_series_combined(visual_zone, machine_zone),
-                'passport_number': self._extract_passport_number_combined(visual_zone, machine_zone),
-                'passport_code': self._extract_passport_code_combined(visual_zone, machine_zone),
-                'issue_date': self._extract_issue_date_combined(visual_zone, machine_zone),
-                'authority': self._extract_authority_combined(visual_zone, machine_zone),
-                'birth_place': self._extract_birth_place_combined(visual_zone, machine_zone),
-                'raw_text': text[:500] + "..." if len(text) > 500 else text
+                'full_name': self._extract_name_universal(text),
+                'birth_date': self._extract_birth_date_universal(text),
+                'passport_series': self._extract_series_universal(text),
+                'passport_number': self._extract_number_universal(text),
+                'passport_code': self._extract_code_universal(text),
+                'issue_date': self._extract_issue_date_universal(text),
+                'authority': self._extract_authority_universal(text),
+                'birth_place': self._extract_birth_place_universal(text),
             }
             
-            logger.info(f"Извлечены данные: { {k: v for k, v in result.items() if k != 'raw_text'} }")
+            logger.info(f"Результат парсинга: {result}")
             return result
             
         except Exception as e:
-            logger.error(f"Ошибка парсинга паспорта: {e}")
-            return {'error': f'Ошибка парсинга: {str(e)}'}
+            logger.error(f"Ошибка парсинга: {e}")
+            return {'error': str(e)}
     
-    def _clean_text(self, text: str) -> str:
-        """Очищает текст для парсинга"""
-        # Заменяем множественные пробелы и переносы
-        text = re.sub(r'\s+', ' ', text)
-        # Приводим к верхнему регистру
-        text = text.upper().strip()
-        return text
-    
-    def _split_zones(self, text: str) -> tuple:
-        """
-        Разделяет текст на визуальную и машиночитаемую зоны
-        """
-        # Машиночитаемая зона обычно содержит много <<<<<<< и имеет специфичный формат
-        machine_indicators = ['<<<<<<<', 'RUS', 'F<', 'M<', 'RUS<']
-        
-        for indicator in machine_indicators:
-            if indicator in text:
-                parts = text.split(indicator)
-                if len(parts) >= 2:
-                    visual_zone = parts[0]
-                    machine_zone = indicator + parts[1]
-                    return visual_zone, machine_zone
-        
-        # Если не нашли индикаторы, возвращаем весь текст как визуальную зону
-        return text, ""
-    
-    def _extract_name_combined(self, visual_zone: str, machine_zone: str) -> str:
-        """
-        Извлекает ФИО из обеих зон
-        """
+    def _extract_name_universal(self, text: str) -> str:
+        """Универсальное извлечение ФИО"""
         try:
-            # Сначала пытаемся из визуальной зоны
-            visual_name = self._extract_name_visual(visual_zone)
-            if visual_name != "не распознано":
-                return visual_name
+            # СПОСОБ 1: Ищем три слова подряд в формате "Фамилия Имя Отчество"
+            pattern = r'\b([А-ЯЁ]{2,}(?:ОВ|ЕВ|ИН|ЫХ|ИЙ|АЯ|ОВА|ЕВА|ИНА|ЫХ|АЯ))\s+([А-ЯЁ]{2,})\s+([А-ЯЁ]{2,}(?:ОВИЧ|ЕВИЧ|ОВНА|ЕВНА|ИЧ|ИНИЧНА))\b'
+            match = re.search(pattern, text)
+            if match:
+                surname, name, patronymic = match.groups()
+                if (self._is_valid_surname(surname) and 
+                    self._is_valid_name(name) and 
+                    self._is_valid_patronymic(patronymic)):
+                    return f"{surname} {name} {patronymic}"
             
-            # Затем из машиночитаемой зоны
-            machine_name = self._extract_name_machine(machine_zone)
-            if machine_name != "не распознано":
-                return machine_name
+            # СПОСОБ 2: Ищем по строкам (Фамилия на одной строке, Имя Отчество на следующей)
+            lines = [line.strip() for line in text.split('\n') if line.strip()]
+            for i in range(len(lines)-2):
+                current_line = lines[i]
+                next_line = lines[i+1]
+                
+                # Проверяем, что текущая строка - одна фамилия, а следующая - имя и отчество
+                if (len(current_line.split()) == 1 and 
+                    len(next_line.split()) == 2 and
+                    self._is_valid_surname(current_line) and
+                    self._is_valid_name(next_line.split()[0]) and
+                    self._is_valid_patronymic(next_line.split()[1])):
+                    return f"{current_line} {next_line}"
+            
+            # СПОСОБ 3: Ищем любые три слова подряд
+            matches = re.findall(r'\b([А-ЯЁ]{3,})\s+([А-ЯЁ]{3,})\s+([А-ЯЁ]{3,})\b', text)
+            for surname, name, patronymic in matches:
+                if (self._is_valid_surname(surname) and 
+                    self._is_valid_name(name) and 
+                    self._is_valid_patronymic(patronymic)):
+                    return f"{surname} {name} {patronymic}"
             
             return "не распознано"
             
@@ -88,206 +74,164 @@ class PassportParser:
             logger.error(f"Ошибка извлечения ФИО: {e}")
             return "не распознано"
     
-    def _extract_name_visual(self, visual_zone: str) -> str:
-        """Извлекает ФИО из визуальной зоны"""
-        # Ищем ФИО в формате с ** ** (жирный шрифт в распознавании)
-        bold_pattern = r'\*\*([А-Я]+)\*\*\s+\*\*([А-Я]+)\*\*\s+\*\*([А-Я]+)\*\*'
-        match = re.search(bold_pattern, visual_zone)
-        if match:
-            surname, name, patronymic = match.groups()
-            return f"{surname} {name} {patronymic}"
-        
-        # Ищем три слова подряд в верхнем регистре
-        name_pattern = r'\b([А-Я]{3,})\s+([А-Я]{3,})\s+([А-Я]{3,})\b'
-        matches = re.findall(name_pattern, visual_zone)
-        for match in matches:
-            surname, name, patronymic = match
-            if self._is_valid_name(surname) and self._is_valid_name(name) and self._is_valid_name(patronymic):
-                return f"{surname} {name} {patronymic}"
-        
-        return "не распознано"
-    
-    def _extract_name_machine(self, machine_zone: str) -> str:
-        """Извлекает ФИО из машиночитаемой зоны"""
-        # Формат: P<RUSLASTNAME<FIRSTNAME<MIDDLENAME<<<<<...
-        if 'P<' in machine_zone:
-            parts = machine_zone.split('P<')[1].split('<<')[0].split('<')
-            if len(parts) >= 3:
-                surname = parts[0].replace('RUS', '')
-                name = parts[1]
-                patronymic = parts[2]
-                return f"{surname} {name} {patronymic}"
-        
-        return "не распознано"
-    
-    def _extract_birth_date_combined(self, visual_zone: str, machine_zone: str) -> str:
-        """Извлекает дату рождения из обеих зон"""
+    def _extract_birth_date_universal(self, text: str) -> str:
+        """Извлекает дату рождения"""
         try:
-            # Из визуальной зоны
-            visual_date = self._extract_date_visual(visual_zone)
-            if visual_date != "не распознано":
-                return visual_date
+            dates = self._extract_all_dates(text)
             
-            # Из машиночитаемой зоны (формат: YYMMDD)
-            machine_date = self._extract_birth_date_machine(machine_zone)
-            if machine_date != "не распознано":
-                return machine_date
+            if len(dates) >= 2:
+                # Дата рождения обычно вторая по порядку или идет сразу после ФИО
+                return dates[1]  # Вторая дата чаще всего дата рождения
             
-            return "не распознано"
+            return dates[0] if dates else "не распознано"
             
         except Exception as e:
             logger.error(f"Ошибка извлечения даты рождения: {e}")
             return "не распознано"
     
-    def _extract_date_visual(self, visual_zone: str) -> str:
-        """Извлекает дату из визуальной зоны"""
-        dates = re.findall(r'\b(\d{2}\.\d{2}\.\d{4})\b', visual_zone)
-        for date in dates:
-            try:
-                date_obj = datetime.strptime(date, '%d.%m.%Y')
-                if 1900 <= date_obj.year <= datetime.now().year:
-                    return date
-            except ValueError:
-                continue
-        return "не распознано"
-    
-    def _extract_birth_date_machine(self, machine_zone: str) -> str:
-        """Извлекает дату рождения из машиночитаемой зоны (формат: YYMMDD)"""
-        # Ищем паттерн 6 цифр после ФИО (941122 = 94-11-22)
-        match = re.search(r'(\d{2})(\d{2})(\d{2})[FM]', machine_zone)
-        if match:
-            year, month, day = match.groups()
-            # Преобразуем год (94 = 1994)
-            year = f"19{year}" if int(year) < 50 else f"20{year}"
-            return f"{day}.{month}.{year}"
-        return "не распознано"
-    
-    def _extract_passport_series_combined(self, visual_zone: str, machine_zone: str) -> str:
+    def _extract_series_universal(self, text: str) -> str:
         """Извлекает серию паспорта"""
         try:
-            # Из машиночитаемой зоны (первые 4 цифры номера паспорта)
-            if machine_zone:
-                # Ищем 9 цифр подряд (номер паспорта в машиночитаемой зоне)
-                match = re.search(r'\b(\d{9})\b', machine_zone)
-                if match:
-                    full_number = match.group(1)
-                    # Первые 4 цифры - серия, последние 6 - номер
-                    series = f"{full_number[:2]} {full_number[2:4]}"
-                    return series
+            # СПОСОБ 1: Из MRZ строки
+            mrz_match = re.search(r'P[NRUS]{2}[A-Z<]*?(\d{2})(\d{2})', text)
+            if mrz_match:
+                return f"{mrz_match.group(1)} {mrz_match.group(2)}"
             
-            # Из визуальной зоны
-            series_visual = self._extract_series_visual(visual_zone)
-            if series_visual != "не распознано":
-                return series_visual
+            # СПОСОБ 2: Ищем паттерн "XX XX" (серия паспорта)
+            series_match = re.search(r'\b(\d{2})\s*(\d{2})\b', text)
+            if series_match:
+                part1, part2 = series_match.groups()
+                # Проверяем, что это не часть даты
+                if not self._is_part_of_date(part1 + part2, text):
+                    return f"{part1} {part2}"
             
             return "не распознано"
             
         except Exception as e:
-            logger.error(f"Ошибка извлечения серии паспорта: {e}")
+            logger.error(f"Ошибка извлечения серии: {e}")
             return "не распознано"
     
-    def _extract_series_visual(self, visual_zone: str) -> str:
-        """Извлекает серию из визуальной зоны"""
-        # Ищем 4 цифры (серия без пробела)
-        match = re.search(r'\b(\d{4})\b', visual_zone)
-        if match:
-            series = match.group(1)
-            return f"{series[:2]} {series[2:]}"
-        return "не распознано"
-    
-    def _extract_passport_number_combined(self, visual_zone: str, machine_zone: str) -> str:
+    def _extract_number_universal(self, text: str) -> str:
         """Извлекает номер паспорта"""
         try:
-            # Из машиночитаемой зоны
-            if machine_zone:
-                match = re.search(r'\b(\d{9})\b', machine_zone)
-                if match:
-                    full_number = match.group(1)
-                    # Последние 6 цифр - номер
-                    number = full_number[4:]
+            # СПОСОБ 1: Из MRZ строки
+            mrz_match = re.search(r'P[NRUS]{2}[A-Z<]*?\d{4}(\d{6})', text)
+            if mrz_match:
+                return mrz_match.group(1)
+            
+            # СПОСОБ 2: Ищем 6 цифр подряд
+            numbers = re.findall(r'\b(\d{6})\b', text)
+            for number in numbers:
+                if not self._is_part_of_date(number, text):
                     return number
             
-            # Из визуальной зоны
-            number_visual = self._extract_number_visual(visual_zone)
-            if number_visual != "не распознано":
-                return number_visual
-            
             return "не распознано"
             
         except Exception as e:
-            logger.error(f"Ошибка извлечения номера паспорта: {e}")
+            logger.error(f"Ошибка извлечения номера: {e}")
             return "не распознано"
     
-    def _extract_number_visual(self, visual_zone: str) -> str:
-        """Извлекает номер из визуальной зоны"""
-        # Ищем 6 цифр подряд
-        match = re.search(r'\b(\d{6})\b', visual_zone)
-        if match:
-            return match.group(1)
-        return "не распознано"
-    
-    def _extract_passport_code_combined(self, visual_zone: str, machine_zone: str) -> str:
+    def _extract_code_universal(self, text: str) -> str:
         """Извлекает код подразделения"""
         try:
-            # Из визуальной зоны (формат: XXX-XXX)
-            code_visual = self._extract_code_visual(visual_zone)
-            if code_visual != "не распознано":
-                return code_visual
+            # Ищем паттерн "XXX-XXX" или "XXX XXX"
+            match = re.search(r'\b(\d{3}[\s-]\d{3})\b', text)
+            if match:
+                return match.group(1).replace(' ', '-')
             
             return "не распознано"
             
         except Exception as e:
-            logger.error(f"Ошибка извлечения кода подразделения: {e}")
+            logger.error(f"Ошибка извлечения кода: {e}")
             return "не распознано"
     
-    def _extract_code_visual(self, visual_zone: str) -> str:
-        """Извлекает код подразделения из визуальной зоны"""
-        match = re.search(r'\b(\d{3}[\s-]\d{3})\b', visual_zone)
-        if match:
-            return match.group(1)
-        return "не распознано"
-    
-    def _extract_issue_date_combined(self, visual_zone: str, machine_zone: str) -> str:
+    def _extract_issue_date_universal(self, text: str) -> str:
         """Извлекает дату выдачи"""
-        return self._extract_date_visual(visual_zone)
+        try:
+            dates = self._extract_all_dates(text)
+            
+            if len(dates) >= 2:
+                # Дата выдачи обычно первая в документе
+                return dates[0]
+            
+            return dates[0] if dates else "не распознано"
+            
+        except Exception as e:
+            logger.error(f"Ошибка извлечения даты выдачи: {e}")
+            return "не распознано"
     
-    def _extract_authority_combined(self, visual_zone: str, machine_zone: str) -> str:
+    def _extract_authority_universal(self, text: str) -> str:
         """Извлекает орган выдачи"""
         try:
-            # Ищем в визуальной зоне
-            patterns = [
-                r'(ОТДЕЛ[^,]{10,80})',
-                r'(УФМС[^,]{10,80})',
-                r'(УФИС[^,]{10,80})',
-            ]
+            # Ключевые слова для поиска органа выдачи
+            start_keywords = ['ОТДЕЛ', 'УФМС', 'УФИС', 'МВД', 'ГУВД', 'ОВД']
+            end_keywords = ['РАЙОНЕ', 'ОКРУГЕ', 'ГОРОДЕ', 'ОБЛАСТИ', 'КРАЕ']
             
-            for pattern in patterns:
-                match = re.search(pattern, visual_zone)
-                if match:
-                    return match.group(1).strip()
+            for start_word in start_keywords:
+                if start_word in text:
+                    start_idx = text.find(start_word)
+                    # Ищем конец
+                    substring = text[start_idx:start_idx + 200]
+                    
+                    # Обрезаем до следующего ключевого слова или даты
+                    for end_word in end_keywords:
+                        if end_word in substring:
+                            end_idx = substring.find(end_word) + len(end_word)
+                            return substring[:end_idx].strip()
+                    
+                    # Если не нашли конец, обрезаем до даты или берем 100 символов
+                    date_match = re.search(r'\d{2}\.\d{2}\.\d{4}', substring)
+                    if date_match:
+                        end_idx = date_match.start()
+                        return substring[:end_idx].strip()
+                    
+                    return substring[:100].strip()
             
             return "не распознано"
             
         except Exception as e:
-            logger.error(f"Ошибка извлечения органа выдачи: {e}")
+            logger.error(f"Ошибка извлечения органа: {e}")
             return "не распознано"
     
-    def _extract_birth_place_combined(self, visual_zone: str, machine_zone: str) -> str:
-        """Извлекает место рождения"""
+    def _extract_birth_place_universal(self, text: str) -> str:
+        """Универсальное извлечение места рождения"""
         try:
-            # Ищем место рождения в визуальной зоне
-            birth_place_patterns = [
-                r'ГОР\.\s*([^0-9]{10,80}?)(?=\d|$)',
-                r'(\d{2}\.\d{2}\.\d{4})\s+([^0-9]{10,80}?РЕСПУБЛИКИ[^0-9]{10,80})',
-            ]
+            # Убираем MRZ и технические данные
+            clean_text = re.sub(r'P<[A-Z<]*\d+[A-Z<]*', '', text)
+            clean_text = re.sub(r'\d{4}[A-Z]+\w*', '', clean_text)
             
-            for pattern in birth_place_patterns:
-                match = re.search(pattern, visual_zone)
-                if match:
-                    if len(match.groups()) == 2:
-                        return f"ГОР. {match.group(2).strip()}"
-                    else:
-                        return f"ГОР. {match.group(1).strip()}"
+            # Ищем место рождения после даты рождения
+            birth_date = self._extract_birth_date_universal(clean_text)
+            if birth_date != "не распознано":
+                date_idx = clean_text.find(birth_date)
+                if date_idx != -1:
+                    text_after_date = clean_text[date_idx + len(birth_date):]
+                    
+                    # Ищем до следующей даты или ключевых слов
+                    stop_markers = ['Код подразделения', 'Выдан', 'Дата выдачи', 'Паспорт', 'Серия']
+                    end_idx = len(text_after_date)
+                    
+                    for marker in stop_markers:
+                        marker_idx = text_after_date.find(marker.upper())
+                        if marker_idx != -1 and marker_idx < end_idx:
+                            end_idx = marker_idx
+                    
+                    birth_place = text_after_date[:end_idx].strip()
+                    birth_place = self._clean_birth_place_universal(birth_place)
+                    
+                    if birth_place and len(birth_place) > 5:
+                        return birth_place
+            
+            # Поиск по географическим указателям
+            geo_indicators = ['ГОР.', 'С.', 'Д.', 'ПОС.', 'РЕСП.', 'КРАЙ', 'ОБЛ.', 'Г.', 'ДЕРЕВНЯ', 'СЕЛО']
+            for indicator in geo_indicators:
+                if indicator in clean_text:
+                    indicator_idx = clean_text.find(indicator)
+                    # Берем текст после индикатора
+                    place_text = clean_text[indicator_idx:indicator_idx + 150]
+                    place_text = self._clean_birth_place_universal(place_text)
+                    if place_text and len(place_text) > 5:
+                        return place_text
             
             return "не распознано"
             
@@ -295,10 +239,71 @@ class PassportParser:
             logger.error(f"Ошибка извлечения места рождения: {e}")
             return "не распознано"
     
+    def _clean_birth_place_universal(self, text: str) -> str:
+        """Очищает место рождения от лишних слов и символов"""
+        # Убираем технические слова
+        unwanted_words = [
+            'РОЖДЕНИЯ', 'КОД', 'ПОДРАЗДЕЛЕНИЯ', 'ВЫДАЧИ', 'ДАТА', 
+            'МЕСТО', 'ПАСПОРТ', 'СЕРИЯ', 'НОМЕР', 'ВЫДАН'
+        ]
+        
+        for word in unwanted_words:
+            text = text.replace(word, '')
+        
+        # Убираем специальные символы и мусор
+        text = re.sub(r'[<>{}\[\]\\]', '', text)
+        text = re.sub(r'\d{4,}[A-Za-z]*', '', text)  # Убираем длинные цифробуквенные последовательности
+        
+        # Убираем лишние пробелы
+        text = re.sub(r'\s+', ' ', text).strip()
+        
+        # Обрезаем до разумной длины
+        if len(text) > 100:
+            text = text[:100] + '...'
+        
+        return text
+    
+    def _extract_all_dates(self, text: str) -> list:
+        """Извлекает все валидные даты из текста"""
+        dates = []
+        matches = re.findall(r'\b(\d{2}\.\d{2}\.\d{4})\b', text)
+        
+        for date_str in matches:
+            try:
+                date_obj = datetime.strptime(date_str, '%d.%m.%Y')
+                # Проверяем реалистичные границы дат для паспорта
+                if 1930 <= date_obj.year <= datetime.now().year:
+                    dates.append(date_str)
+            except ValueError:
+                continue
+        
+        return dates
+    
+    def _is_valid_surname(self, word: str) -> bool:
+        """Проверяет валидность фамилии"""
+        invalid_words = ['РОССИЙСКАЯ', 'ФЕДЕРАЦИЯ', 'ПАСПОРТ', 'ОТДЕЛ', 'УФМС', 
+                        'УФИС', 'РОССИИ', 'ДАТА', 'ВЫДАЧИ', 'КОД', 'ПОДРАЗДЕЛЕНИЯ',
+                        'МВД', 'РЕСПУБЛИКА', 'ОБЛАСТЬ', 'КРАЙ']
+        return (word.isalpha() and len(word) >= 2 and word not in invalid_words)
+    
     def _is_valid_name(self, word: str) -> bool:
-        """Проверяет, является ли слово валидным именем"""
-        invalid_words = ['ФЕДЕРАЦИЯ', 'ОТДЕЛ', 'УФМС', 'УФИС', 'РОССИИ', 'ПО', 'КРАЮ', 'РАЙОНЕ', 'ПАСПОРТ']
-        return (len(word) >= 3 and 
-                word.isalpha() and 
-                word not in invalid_words and
-                not any(char.isdigit() for char in word))
+        """Проверяет валидность имени"""
+        common_names = [
+            'АЛЕКСАНДР', 'СЕРГЕЙ', 'ВЛАДИМИР', 'ДМИТРИЙ', 'АНДРЕЙ', 
+            'АЛЕКСЕЙ', 'ЕВГЕНИЙ', 'МИХАИЛ', 'ИВАН', 'НИКОЛАЙ',
+            'ТАТЬЯНА', 'ЕЛЕНА', 'ОЛЬГА', 'АННА', 'ИРИНА', 
+            'СВЕТЛАНА', 'МАРИЯ', 'НАДЕЖДА', 'ЮЛИЯ', 'ЕКАТЕРИНА'
+        ]
+        return word in common_names
+    
+    def _is_valid_patronymic(self, word: str) -> bool:
+        """Проверяет валидность отчества"""
+        return (word.endswith(('ОВИЧ', 'ЕВИЧ', 'ИЧ', 'ОВНА', 'ЕВНА', 'ИЧНА', 'ИНИЧНА')))
+    
+    def _is_part_of_date(self, number: str, text: str) -> bool:
+        """Проверяет, является ли число частью даты"""
+        idx = text.find(number)
+        if idx == -1:
+            return False
+        context = text[max(0, idx-5):min(len(text), idx+11)]
+        return bool(re.search(r'\d{2}\.\d{2}\.\d{4}', context))
